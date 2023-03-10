@@ -289,7 +289,7 @@ class WithNKBL2
   ways: Int = 8,
   inclusive: Boolean = true,
   banks: Int = 1,
-  releaseData: Int = 1
+  releaseData: Int = 3
 ) extends Config((site, here, up) => {
   case XSTileKey =>
     val upParams = up(XSTileKey)
@@ -366,14 +366,14 @@ class DefaultL3DebugConfig(n: Int = 1) extends Config(
 
 class MediumConfig(n: Int = 1) extends Config(
   new WithNKBL3(4096, inclusive = false, banks = 4)
-    ++ new WithNKBL2(512, inclusive = false, releaseData = 1)
+    ++ new WithNKBL2(512, inclusive = false, releaseData = 3)
     ++ new WithNKBL1D(128)
     ++ new BaseConfig(n)
 )
 
 class DefaultConfig(n: Int = 1) extends Config(
   new WithNKBL3(6 * 1024, inclusive = false, banks = 4, ways = 6)
-    ++ new WithNKBL2(2 * 512, inclusive = false, banks = 4, releaseData = 1)
+    ++ new WithNKBL2(2 * 512, inclusive = false, banks = 4, releaseData = 3)
     ++ new WithNKBL1D(64)
     ++ new BaseConfig(n)
 )
