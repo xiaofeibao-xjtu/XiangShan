@@ -55,6 +55,7 @@ class IssueQueueIO()(implicit p: Parameters, params: IssueBlockParams) extends X
 
   // Outputs
   val deq: MixedVec[DecoupledIO[IssueQueueIssueBundle]] = params.genIssueDecoupledBundle
+  val validCntDeqVec = Output(Vec(params.numDeq,UInt(params.numEntries.U.getWidth.W)))
   val wakeupToIQ: MixedVec[ValidIO[IssueQueueIQWakeUpBundle]] = params.genIQWakeUpSourceValidBundle
   val status = Output(new IssueQueueStatusBundle(params.numEnq))
   // val statusNext = Output(new IssueQueueStatusBundle(params.numEnq))
@@ -368,11 +369,18 @@ class IssueQueueImp(override val wrapper: IssueQueue)(implicit p: Parameters, va
   if (params.numDeq == 2 && params.deqFuSame) {
     enqEntryOldestSel := DontCare
 
-    othersEntryOldestSel(0) := AgeDetector(numEntries = params.numEntries - params.numEnq,
+    othersEntryOldestSel := AgeDetector(numEntries = params.numEntries - params.numEnq,
       enq = VecInit(transEntryDeqVec.zip(transSelVec).map{ case (transEntry, transSel) => Fill(params.numEntries-params.numEnq, transEntry.valid) & transSel }),
-      canIssue = canIssueVec.asUInt(params.numEntries-1, params.numEnq)
+      canIssue = VecInit(canIssueVec.asUInt(params.numEntries-1, params.numEnq), canIssueVec.asUInt(params.numEntries - 1, params.numEnq) ^ othersEntryOldestSel(0).bits)
     )
-    othersEntryOldestSel(1) := DontCare
+//    othersEntryOldestSel(1) := DontCare
+
+    val enqsCanDeq = canIssueVec.asUInt(params.numEnq, 0).asUInt.orR
+    val enq0CanDeq = canIssueVec(0)
+    val enq1CanDeq = canIssueVec(1)
+    val othersEntryCanDeq = canIssueVec.asUInt.head(params.numEntries - params.numEnq).orR
+    val deq0SelEnq0 = canIssueVec.asUInt.head(params.numEntries - params.numEnq) === 0.U && enq0CanDeq
+    val deq0SelEnq1 = canIssueVec.asUInt.head(params.numEntries - params.numEnq) === 0.U && !enq0CanDeq && enq1CanDeq
 
     subDeqRequest.get := canIssueVec.asUInt & ~Cat(othersEntryOldestSel(0).bits, 0.U((params.numEnq).W))
 
@@ -381,12 +389,20 @@ class IssueQueueImp(override val wrapper: IssueQueue)(implicit p: Parameters, va
     subDeqSelValidVec.get := subDeqPolicy.io.deqSelOHVec.map(oh => oh.valid)
     subDeqSelOHVec.get := subDeqPolicy.io.deqSelOHVec.map(oh => oh.bits)
 
-    deqSelValidVec(0) := othersEntryOldestSel(0).valid || subDeqSelValidVec.get(1)
-    deqSelValidVec(1) := subDeqSelValidVec.get(0)
+    deqSelValidVec(0) := othersEntryOldestSel(0).valid || enqsCanDeq
+    deqSelValidVec(1) := othersEntryOldestSel(1).valid || (othersEntryCanDeq && enqsCanDeq) || (enq0CanDeq && enq1CanDeq)
     deqSelOHVec(0) := Mux(othersEntryOldestSel(0).valid,
                           Cat(othersEntryOldestSel(0).bits, 0.U((params.numEnq).W)),
-                          subDeqSelOHVec.get(1)) & canIssueMergeAllBusy(0)
-    deqSelOHVec(1) := subDeqSelOHVec.get(0) & canIssueMergeAllBusy(1)
+                          Mux(enq0CanDeq, 1.U, 2.U)) & canIssueMergeAllBusy(0)
+    deqSelOHVec(1) := Mux(othersEntryOldestSel(1).valid,
+                          Cat(othersEntryOldestSel(1).bits, 0.U((params.numEnq).W)),
+                          Mux(deq0SelEnq0, 2.U, Mux(enq0CanDeq, 1.U, 2.U))) & canIssueMergeAllBusy(1)
+//    deqSelValidVec(0) := othersEntryOldestSel(0).valid || subDeqSelValidVec.get(1)
+//    deqSelValidVec(1) := subDeqSelValidVec.get(0)
+//    deqSelOHVec(0) := Mux(othersEntryOldestSel(0).valid,
+//                          Cat(othersEntryOldestSel(0).bits, 0.U((params.numEnq).W)),
+//                          subDeqSelOHVec.get(1)) & canIssueMergeAllBusy(0)
+//    deqSelOHVec(1) := subDeqSelOHVec.get(0) & canIssueMergeAllBusy(1)
 
     finalDeqSelValidVec.zip(finalDeqSelOHVec).zip(deqSelValidVec).zip(deqSelOHVec).zipWithIndex.foreach { case ((((selValid, selOH), deqValid), deqOH), i) =>
       selValid := deqValid && deqOH.orR && io.deq(i).ready
@@ -621,6 +637,20 @@ class IssueQueueImp(override val wrapper: IssueQueue)(implicit p: Parameters, va
   private val enqHasValid = validVec.take(params.numEnq).reduce(_ | _)
   private val enqEntryValidCnt = PopCount(validVec.take(params.numEnq))
   private val othersValidCnt = PopCount(validVec.drop(params.numEnq))
+  private val enqEntryValidCntDeq0 = PopCount(
+    validVec.take(params.numEnq).zip(deqCanAcceptVec(0).take(params.numEnq)).map{case (a,b) => a && b}
+  )
+  private val othersValidCntDeq0 = PopCount(
+    validVec.drop(params.numEnq).zip(deqCanAcceptVec(0).drop(params.numEnq)).map { case (a, b) => a && b }
+  )
+  private val enqEntryValidCntDeq1 = PopCount(
+    validVec.take(params.numEnq).zip(deqCanAcceptVec.last.take(params.numEnq)).map { case (a, b) => a && b }
+  )
+  private val othersValidCntDeq1 = PopCount(
+    validVec.drop(params.numEnq).zip(deqCanAcceptVec.last.drop(params.numEnq)).map { case (a, b) => a && b }
+  )
+  io.validCntDeqVec.head := enqEntryValidCntDeq0 +& othersValidCntDeq0 // validCntDeqVec(0)
+  io.validCntDeqVec.last := enqEntryValidCntDeq1 +& othersValidCntDeq1 // validCntDeqVec(1)
   io.status.leftVec(0) := validVec.drop(params.numEnq).reduce(_ & _)
   for (i <- 0 until params.numEnq) {
     io.status.leftVec(i + 1) := othersValidCnt === (params.numEntries - params.numEnq - (i + 1)).U
@@ -644,6 +674,12 @@ class IssueQueueImp(override val wrapper: IssueQueue)(implicit p: Parameters, va
   // enq count
   XSPerfAccumulate("enq_valid_cnt", PopCount(io.enq.map(_.fire)))
   XSPerfAccumulate("enq_fire_cnt", PopCount(io.enq.map(_.fire)))
+  XSPerfAccumulate("enq_alu_fire_cnt", PopCount(io.enq.map{case enq => enq.fire && FuType.isAlu(enq.bits.fuType)}))
+  XSPerfAccumulate("enq_brh_fire_cnt", PopCount(io.enq.map{case enq => enq.fire && FuType.isBrh(enq.bits.fuType)}))
+  XSPerfAccumulate("deqDelay0_fire_cnt", PopCount(io.deqDelay.head.fire))
+  XSPerfAccumulate("deqDelay1_fire_cnt", PopCount(io.deqDelay.last.fire))
+  XSPerfAccumulate("deq0_fire_cnt", PopCount(io.deq.head.fire))
+  XSPerfAccumulate("deq1_fire_cnt", PopCount(io.deq.last.fire))
   // valid count
   XSPerfHistogram("enq_entry_valid_cnt", enqEntryValidCnt, true.B, 0, params.numEnq + 1)
   XSPerfHistogram("other_entry_valid_cnt", othersValidCnt, true.B, 0, params.numEntries - params.numEnq + 1)
