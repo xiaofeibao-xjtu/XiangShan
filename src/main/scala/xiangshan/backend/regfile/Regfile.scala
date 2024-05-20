@@ -22,6 +22,7 @@ import chisel3.util._
 import xiangshan._
 import xiangshan.backend.datapath.DataConfig.{DataConfig, FpData, FpRegSrcDataSet, IntData, IntRegSrcDataSet, VecData, VecRegSrcDataSet, VfRegSrcDataSet}
 import xiangshan.backend.exu.ExeUnitParams
+import utils.XSPerfAccumulate
 
 class RfReadPort(dataWidth: Int, addrWidth: Int) extends Bundle {
   val ren = Input(Bool())
@@ -67,7 +68,7 @@ class Regfile
   len: Int,
   width: Int,
   bankNum: Int = 1,
-) extends Module {
+)(implicit p: Parameters) extends Module {
   val io = IO(new Bundle() {
     val readPorts = Vec(numReadPorts, new RfReadPort(len, width))
     val writePorts = Vec(numWritePorts, new RfWritePort(len, width))
@@ -76,9 +77,11 @@ class Regfile
 
   println(name + ": size:" + numPregs + " read: " + numReadPorts + " write: " + numWritePorts)
 
+  val readPorts = io.readPorts
+  val writePorts = io.writePorts
   val mem = Reg(Vec(numPregs, UInt(len.W)))
   require(Seq(1, 2, 4).contains(bankNum), "bankNum must be 1 or 2 or 4")
-  for (r <- io.readPorts) {
+  for (r <- readPorts) {
     if (bankNum == 1) {
       r.data := mem(RegEnable(r.addr, r.ren))
     }
@@ -97,13 +100,14 @@ class Regfile
       r.data := Mux1H(hitBankReg, banksRdata)
     }
   }
-  val writePorts = io.writePorts
+
   for (i <- writePorts.indices) {
     if (i < writePorts.size-1) {
       val hasSameWrite = writePorts.drop(i + 1).map(w => w.wen && w.addr === writePorts(i).addr && writePorts(i).wen).reduce(_ || _)
       assert(!hasSameWrite, "RegFile two or more writePorts write same addr")
     }
   }
+
   for (i <- mem.indices) {
     if (hasZero && i == 0) {
       mem(i) := 0.U
@@ -121,6 +125,23 @@ class Regfile
     val zero_rdata = Mux(rport.addr === 0.U, 0.U, mem(rport.addr))
     rport.data := (if (hasZero) zero_rdata else mem(rport.addr))
   }
+
+  // writePorts perf counter
+  for (i <- writePorts.indices) {
+    for (j <- (i + 1) until writePorts.size) {
+      val hasSameWen = writePorts(i).wen && writePorts(j).wen
+      XSPerfAccumulate(s"${name}_writePorts_${i}_${j}_conflict", hasSameWen)
+    }
+  }
+
+ //readPorts perf counter
+  for (i <- readPorts.indices) {
+    for (j <- (i + 1) until readPorts.size) {
+      val hasSameRen = readPorts(i).ren && readPorts(j).ren
+      XSPerfAccumulate(s"${name}_readPorts_${i}_${j}_conflict", hasSameRen)
+    }
+  }
+
 }
 
 object Regfile {
