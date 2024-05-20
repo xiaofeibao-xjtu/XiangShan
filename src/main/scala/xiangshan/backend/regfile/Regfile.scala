@@ -24,6 +24,7 @@ import xiangshan.backend.datapath.DataConfig.{DataConfig, FpData, FpRegSrcDataSe
 import xiangshan.backend.exu.ExeUnitParams
 
 class RfReadPort(dataWidth: Int, addrWidth: Int) extends Bundle {
+  val ren = Input(Bool())
   val addr = Input(UInt(addrWidth.W))
   val data = Output(UInt(dataWidth.W))
 }
@@ -79,7 +80,7 @@ class Regfile
   require(Seq(1, 2, 4).contains(bankNum), "bankNum must be 1 or 2 or 4")
   for (r <- io.readPorts) {
     if (bankNum == 1) {
-      r.data := mem(RegNext(r.addr))
+      r.data := mem(RegEnable(r.addr, r.ren))
     }
     else {
       val banks = (0 until bankNum).map { case i =>
@@ -127,6 +128,7 @@ object Regfile {
   def apply(
     name         : String,
     numEntries   : Int,
+    ren          : Seq[Bool],
     raddr        : Seq[UInt],
     rdata        : Vec[UInt],
     wen          : Seq[Bool],
@@ -148,7 +150,8 @@ object Regfile {
     require(waddr.map(_.getWidth).min == waddr.map(_.getWidth).max, s"addrBits != $addrBits")
 
     val regfile = Module(new Regfile(name, numEntries, numReadPorts, numWritePorts, hasZero, dataBits, addrBits, bankNum))
-    rdata := regfile.io.readPorts.zip(raddr).map { case (rport, addr) =>
+    rdata := regfile.io.readPorts.zip(ren).zip(raddr).map { case ((rport, en), addr) =>
+      rport.ren := en
       rport.addr := addr
       rport.data
     }
@@ -193,6 +196,7 @@ object IntRegFile {
   def apply(
     name         : String,
     numEntries   : Int,
+    ren          : Seq[Bool],
     raddr        : Seq[UInt],
     rdata        : Vec[UInt],
     wen          : Seq[Bool],
@@ -204,7 +208,7 @@ object IntRegFile {
     bankNum      : Int,
   )(implicit p: Parameters): Unit = {
     Regfile(
-      name, numEntries, raddr, rdata, wen, waddr, wdata,
+      name, numEntries, ren, raddr, rdata, wen, waddr, wdata,
       hasZero = true, withReset, bankNum, debugReadAddr, debugReadData)
   }
 }
@@ -214,6 +218,7 @@ object FpRegFile {
   def apply(
              name         : String,
              numEntries   : Int,
+             ren          : Seq[Bool],
              raddr        : Seq[UInt],
              rdata        : Vec[UInt],
              wen          : Seq[Bool],
@@ -225,7 +230,7 @@ object FpRegFile {
              bankNum      : Int,
            )(implicit p: Parameters): Unit = {
     Regfile(
-      name, numEntries, raddr, rdata, wen, waddr, wdata,
+      name, numEntries, ren, raddr, rdata, wen, waddr, wdata,
       hasZero = false, withReset, bankNum, debugReadAddr, debugReadData)
   }
 }
@@ -236,6 +241,7 @@ object VfRegFile {
     name         : String,
     numEntries   : Int,
     splitNum     : Int,
+    ren          : Seq[Seq[Bool]],
     raddr        : Seq[UInt],
     rdata        : Vec[UInt],
     wen          : Seq[Seq[Bool]],
@@ -249,7 +255,7 @@ object VfRegFile {
     require(splitNum == wen.length, "splitNum should be equal to length of wen vec")
     if (splitNum == 1) {
       Regfile(
-        name, numEntries, raddr, rdata, wen.head, waddr, wdata,
+        name, numEntries, ren.head, raddr, rdata, wen.head, waddr, wdata,
         hasZero = false, withReset, bankNum = 1, debugReadAddr, debugReadData)
     } else {
       val dataWidth = 64
@@ -261,7 +267,7 @@ object VfRegFile {
       for (i <- 0 until splitNum) {
         wdataVec(i) := wdata.map(_ ((i + 1) * dataWidth - 1, i * dataWidth))
         Regfile(
-          name + s"Part${i}", numEntries, raddr, rdataVec(i), wen(i), waddr, wdataVec(i),
+          name + s"Part${i}", numEntries, ren(i), raddr, rdataVec(i), wen(i), waddr, wdataVec(i),
           hasZero = false, withReset, bankNum = 1, debugReadAddr, debugRDataVec.map(_(i))
         )
       }

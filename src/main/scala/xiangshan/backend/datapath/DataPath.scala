@@ -186,12 +186,14 @@ class DataPathImp(override val wrapper: DataPath)(implicit p: Parameters, params
   private val pcReadFtqOffset = Wire(chiselTypeOf(io.fromPcTargetMem.fromDataPathFtqOffset))
   private val targetPCRdata = io.fromPcTargetMem.toDataPathTargetPC
   private val pcRdata = io.fromPcTargetMem.toDataPathPC
+  private val intRfRen = Wire(Vec(params.numPregRd(IntData()), Bool()))
   private val intRfRaddr = Wire(Vec(params.numPregRd(IntData()), UInt(intSchdParams.pregIdxWidth.W)))
   private val intRfRdata = Wire(Vec(params.numPregRd(IntData()), UInt(intSchdParams.rfDataWidth.W)))
   private val intRfWen = Wire(Vec(io.fromIntWb.length, Bool()))
   private val intRfWaddr = Wire(Vec(io.fromIntWb.length, UInt(intSchdParams.pregIdxWidth.W)))
   private val intRfWdata = Wire(Vec(io.fromIntWb.length, UInt(intSchdParams.rfDataWidth.W)))
 
+  private val fpRfRen = Wire(Vec(params.numPregRd(FpData()), Bool()))
   private val fpRfRaddr = Wire(Vec(params.numPregRd(FpData()), UInt(fpSchdParams.pregIdxWidth.W)))
   private val fpRfRdata = Wire(Vec(params.numPregRd(FpData()), UInt(fpSchdParams.rfDataWidth.W)))
   private val fpRfWen = Wire(Vec(io.fromFpWb.length, Bool()))
@@ -199,6 +201,7 @@ class DataPathImp(override val wrapper: DataPath)(implicit p: Parameters, params
   private val fpRfWdata = Wire(Vec(io.fromFpWb.length, UInt(fpSchdParams.rfDataWidth.W)))
 
   private val vfRfSplitNum = VLEN / XLEN
+  private val vfRfRen = Wire(Vec(vfRfSplitNum, Vec(params.numPregRd(VecData()), Bool())))
   private val vfRfRaddr = Wire(Vec(params.numPregRd(VecData()), UInt(vfSchdParams.pregIdxWidth.W)))
   private val vfRfRdata = Wire(Vec(params.numPregRd(VecData()), UInt(vfSchdParams.rfDataWidth.W)))
   private val vfRfWen = Wire(Vec(vfRfSplitNum, Vec(io.fromVfWb.length, Bool())))
@@ -257,15 +260,15 @@ class DataPathImp(override val wrapper: DataPath)(implicit p: Parameters, params
 
   io.debugVconfig.foreach(_ := vconfigDebugReadData.get)
 
-  IntRegFile("IntRegFile", intSchdParams.numPregs, intRfRaddr, intRfRdata, intRfWen, intRfWaddr, intRfWdata,
+  IntRegFile("IntRegFile", intSchdParams.numPregs, intRfRen, intRfRaddr, intRfRdata, intRfWen, intRfWaddr, intRfWdata,
     bankNum = 4,
     debugReadAddr = intDebugRead.map(_._1),
     debugReadData = intDebugRead.map(_._2))
-  FpRegFile("FpRegFile", fpSchdParams.numPregs, fpRfRaddr, fpRfRdata, fpRfWen, fpRfWaddr, fpRfWdata,
+  FpRegFile("FpRegFile", fpSchdParams.numPregs, fpRfRen, fpRfRaddr, fpRfRdata, fpRfWen, fpRfWaddr, fpRfWdata,
     bankNum = 1,
     debugReadAddr = fpDebugRead.map(_._1),
     debugReadData = fpDebugRead.map(_._2))
-  VfRegFile("VfRegFile", vfSchdParams.numPregs, vfRfSplitNum, vfRfRaddr, vfRfRdata, vfRfWen, vfRfWaddr, vfRfWdata,
+  VfRegFile("VfRegFile", vfSchdParams.numPregs, vfRfSplitNum, vfRfRen, vfRfRaddr, vfRfRdata, vfRfWen, vfRfWaddr, vfRfWdata,
     debugReadAddr = vfDebugRead.map(_._1),
     debugReadData = vfDebugRead.map(_._2))
 
@@ -274,10 +277,14 @@ class DataPathImp(override val wrapper: DataPath)(implicit p: Parameters, params
   intRfWen := io.fromIntWb.map(_.wen).toSeq
 
   for (portIdx <- intRfRaddr.indices) {
-    if (intRFReadArbiter.io.out.isDefinedAt(portIdx))
+    if (intRFReadArbiter.io.out.isDefinedAt(portIdx)) {
+      intRfRen(portIdx) := intRFReadArbiter.io.out(portIdx).valid
       intRfRaddr(portIdx) := intRFReadArbiter.io.out(portIdx).bits.addr
-    else
+    }
+    else {
+      intRfRen(portIdx) := false.B
       intRfRaddr(portIdx) := 0.U
+    }
   }
 
   fpRfWaddr := io.fromFpWb.map(_.addr).toSeq
@@ -285,10 +292,13 @@ class DataPathImp(override val wrapper: DataPath)(implicit p: Parameters, params
   fpRfWen := io.fromFpWb.map(_.wen).toSeq
 
   for (portIdx <- fpRfRaddr.indices) {
-    if (fpRFReadArbiter.io.out.isDefinedAt(portIdx))
+    if (fpRFReadArbiter.io.out.isDefinedAt(portIdx)) {
+      fpRfRen(portIdx) := fpRFReadArbiter.io.out(portIdx).valid
       fpRfRaddr(portIdx) := fpRFReadArbiter.io.out(portIdx).bits.addr
-    else
+    } else {
+      fpRfRen(portIdx) := false.B
       fpRfRaddr(portIdx) := 0.U
+    }
   }
 
   vfRfWaddr := io.fromVfWb.map(x => RegEnable(x.addr, x.wen)).toSeq
@@ -296,10 +306,13 @@ class DataPathImp(override val wrapper: DataPath)(implicit p: Parameters, params
   vfRfWen.foreach(_.zip(io.fromVfWb.map(x => RegNext(x.wen))).foreach { case (wenSink, wenSource) => wenSink := wenSource } )// Todo: support fp multi-write
 
   for (portIdx <- vfRfRaddr.indices) {
-    if (vfRFReadArbiter.io.out.isDefinedAt(portIdx))
+    if (vfRFReadArbiter.io.out.isDefinedAt(portIdx)) {
+      vfRfRen.map(_(portIdx) := vfRFReadArbiter.io.out(portIdx).valid)
       vfRfRaddr(portIdx) := vfRFReadArbiter.io.out(portIdx).bits.addr
-    else
+    } else {
+      vfRfRen.map(_(portIdx) := false.B)
       vfRfRaddr(portIdx) := 0.U
+    }
   }
 
 
