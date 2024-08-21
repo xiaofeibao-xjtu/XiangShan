@@ -15,6 +15,7 @@ case class SchdBlockParams(
   schdType        : SchedulerType,
   rfDataWidth     : Int,
   numUopIn        : Int,
+  loadDelayWakeUp : Boolean = false,
 ) {
   var backendParam: BackendParams = null
 

@@ -566,7 +566,9 @@ class DataPathImp(override val wrapper: DataPath)(implicit p: Parameters, params
           case (exuOH, dataSource) => (VecInit(exuOH).asUInt & og0_cancel_delay_need.asUInt).orR && dataSource.readForward
         }.reduce(_ || _) && s0.valid
       } else s0_cancel := false.B
-      val s0_ldCancel = LoadShouldCancel(s0.bits.common.loadDependency, io.ldCancel)
+      val ldCancel = if (s0.bits.exuParams.isFpExeUnit && params.fpSchdParams.get.loadDelayWakeUp) RegNext(io.ldCancel)
+                     else io.ldCancel
+      val s0_ldCancel = LoadShouldCancel(s0.bits.common.loadDependency, ldCancel)
       when (s0.fire && !s1_flush && notBlock && !s1_cancel && !s0_ldCancel && !s0_cancel) {
         s1_valid := s0.valid
       }.otherwise {

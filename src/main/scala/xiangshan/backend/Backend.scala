@@ -264,10 +264,18 @@ class BackendImp(override val wrapper: Backend)(implicit p: Parameters) extends 
   fpScheduler.io.v0WriteBack := 0.U.asTypeOf(fpScheduler.io.v0WriteBack)
   fpScheduler.io.vlWriteBack := 0.U.asTypeOf(fpScheduler.io.vlWriteBack)
   fpScheduler.io.fromDataPath.resp := dataPath.io.toFpIQ
-  fpScheduler.io.fromSchedulers.wakeupVec.foreach { wakeup => wakeup := iqWakeUpMappedBundle(wakeup.bits.exuIdx) }
+  val loadDelayWakeUpToFp = params.fpSchdParams.get.loadDelayWakeUp
+  fpScheduler.io.fromSchedulers.wakeupVec.foreach { wakeup =>
+    if (loadDelayWakeUpToFp && wakeup.bits.params.hasLoadExu) {
+      wakeup.valid := RegNext(iqWakeUpMappedBundle(wakeup.bits.exuIdx).valid)
+      wakeup.bits := RegNext(iqWakeUpMappedBundle(wakeup.bits.exuIdx).bits)
+    } else {
+      wakeup := iqWakeUpMappedBundle(wakeup.bits.exuIdx)
+    }
+  }
   fpScheduler.io.fromDataPath.og0Cancel := og0Cancel
   fpScheduler.io.fromDataPath.og1Cancel := og1Cancel
-  fpScheduler.io.ldCancel := io.mem.ldCancel
+  fpScheduler.io.ldCancel := (if (loadDelayWakeUpToFp) RegNext(io.mem.ldCancel) else io.mem.ldCancel)
   fpScheduler.io.vlWriteBackInfo.vlIsZero := false.B
   fpScheduler.io.vlWriteBackInfo.vlIsVlmax := false.B
 
@@ -448,10 +456,11 @@ class BackendImp(override val wrapper: Backend)(implicit p: Parameters) extends 
   io.fenceio <> fenceio
 
   // to fpExuBlock
+  val ldCancelToFp = if (loadDelayWakeUpToFp) RegNext(io.mem.ldCancel) else io.mem.ldCancel
   fpExuBlock.io.flush := ctrlBlock.io.toExuBlock.flush
   for (i <- 0 until fpExuBlock.io.in.length) {
     for (j <- 0 until fpExuBlock.io.in(i).length) {
-      val shouldLdCancel = LoadShouldCancel(bypassNetwork.io.toExus.fp(i)(j).bits.loadDependency, io.mem.ldCancel)
+      val shouldLdCancel = LoadShouldCancel(bypassNetwork.io.toExus.fp(i)(j).bits.loadDependency, ldCancelToFp)
       NewPipelineConnect(
         bypassNetwork.io.toExus.fp(i)(j), fpExuBlock.io.in(i)(j), fpExuBlock.io.in(i)(j).fire,
         Mux(

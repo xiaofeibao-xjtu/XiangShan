@@ -419,6 +419,7 @@ case class XSCoreParameters
       schdType = schdType,
       rfDataWidth = fpPreg.dataCfg.dataWidth,
       numUopIn = dpParams.VecDqDeqWidth,
+      loadDelayWakeUp = true,
     )
   }
 
@@ -494,10 +495,13 @@ case class XSCoreParameters
         Seq("ALU0", "ALU1", "ALU2", "ALU3", "LDU0", "LDU1", "LDU2") ->
         Seq("ALU0", "BJU0", "ALU1", "BJU1", "ALU2", "BJU2", "ALU3", "BJU3", "LDU0", "LDU1", "LDU2", "STA0", "STA1", "STD0", "STD1")
       ),
-      // TODO: add load -> fp slow wakeup
       WakeUpConfig(
         Seq("FEX0", "FEX1", "FEX2", "FEX3") ->
         Seq("FEX0", "FEX1", "FEX2", "FEX3", "FEX4", "FEX5")
+      ),
+      WakeUpConfig(
+        Seq("LDU0", "LDU1", "LDU2") ->
+        Seq("FEX0", "FEX1", "FEX2", "FEX3", "FEX4", "FEX5"),
       ),
       WakeUpConfig(
         Seq("FEX0", "FEX1", "FEX2", "FEX3") ->
